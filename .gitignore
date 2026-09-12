@@ -1,0 +1,4 @@
+# File hasil generate, bukan bagian dari kode
+*.csv
+*.log
+__pycache__/
