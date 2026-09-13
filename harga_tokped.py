@@ -61,12 +61,38 @@ def scrape(kata_kunci: str, tanpa_jendela: bool) -> dict:
         page.wait_for_timeout(2000)  # sisa produk yang loading belakangan
 
         teks = page.inner_text("body")
+
+        # inner_text nggak ngasih link, jadi sekalian panen semua <a>
+        # yang kebayar di halaman — nanti nama produk dijodoh-in sama href-nya.
+        tautan = page.eval_on_selector_all(
+            "a[href^='https://']",
+            "els => els.map(e => ({t: e.textContent.trim(), h: e.href}))",
+        )
         browser.close()
 
-    return parse_hasil(teks)
+    return parse_hasil(teks, tautan)
 
 
-def parse_hasil(teks: str) -> dict:
+def cari_url(nama: str, tautan: list) -> str:
+    """Jodoh-in nama produk ke href. Kartu produk = <a> yang teksnya
+    mengandung judul produk (dua-duanya dari DOM yang sama, jadi
+    substring match cukup akurat). Link kategori/search dibuang."""
+    target = nama.lower()
+    kandidat = []
+    for t in tautan:
+        if "/search" in t["h"] or "#" in t["h"]:
+            continue
+        teks = re.sub(r"\s+", " ", t["t"]).lower()
+        if target in teks:
+            kandidat.append(t["h"])
+    # Ambil yang paling pendek kalau ada beberapa (anchor terluar lebih panjang),
+    # terus buang ?extParam=... — itu cuma tracking, produk tetap kebuka.
+    if not kandidat:
+        return ""
+    return min(kandidat, key=len).split("?")[0]
+
+
+def parse_hasil(teks: str, tautan: list) -> dict:
     """
     Ubah teks halaman pencarian jadi data produk.
 
@@ -97,7 +123,8 @@ def parse_hasil(teks: str) -> dict:
         if not nama or nama in hasil:
             continue
 
-        produk = {"harga": harga_ke_angka(b)}
+        produk = {"harga": harga_ke_angka(b),
+                  "url": cari_url(nama, tautan)}
 
         # Cek harga coret: harga berikutnya yang nempel (selisih maks 2 baris)
         for k in range(i + 1, min(i + 3, len(baris))):
@@ -145,11 +172,13 @@ def main() -> int:
         # Promo vs harga normal → bandingin ama harga sebelumnya di snapshot.
         if "harga_asli" in p:
             diskon = (1 - p["harga"] / p["harga_asli"]) * 100
-            promo.append((nama, p["harga"], p["harga_asli"], diskon, "coret"))
+            promo.append((nama, p["harga"], p["harga_asli"], diskon, "coret",
+                          p.get("url", "")))
         prev = lama.get(nama, {}).get("harga")
         if prev and p["harga"] < prev:
             turun.append((nama, p["harga"], prev,
-                          (1 - p["harga"] / prev) * 100, "turun"))
+                          (1 - p["harga"] / prev) * 100, "turun",
+                          p.get("url", "")))
 
     # Simpen snapshot hari ini (harga saat ini jadi pembanding run berikutnya).
     path.write_text(json.dumps(produk, ensure_ascii=False, indent=2),
@@ -157,6 +186,16 @@ def main() -> int:
 
     print(f"\n{len(produk)} produk '{kata}' — snapshot disimpan ke {path.name}")
     print(f"(Snapshot sebelumnya: {'ada' if lama else 'belum ada — run berikut baru bisa bandingin'})\n")
+
+    # Semua produk juga dicetak + link, biar bisa langsung diliat.
+    termurah = sorted(produk.items(), key=lambda kv: kv[1]["harga"])
+    print("SEMUA PRODUK (urut dari termurah):\n")
+    for nama, p in termurah:
+        nama_pendek = nama if len(nama) <= 55 else nama[:52] + "..."
+        print(f"  Rp{p['harga']:>10,.0f}  {nama_pendek}")
+        if p.get("url"):
+            print(f"               {p['url']}")
+    print()
 
     tampilkan("🔥 DISKON (harga coret dari Tokopedia)", promo)
     tampilkan("📉 TURUN dari pantauan sebelumnya", turun)
@@ -170,10 +209,12 @@ def tampilkan(judul: str, isi: list) -> None:
     if not isi:
         return
     print(judul)
-    for nama, sekarang, dulu, persen, jenis in sorted(isi, key=lambda x: -x[3])[:8]:
+    for nama, sekarang, dulu, persen, jenis, url in sorted(isi, key=lambda x: -x[3])[:8]:
         nama_pendek = nama if len(nama) <= 55 else nama[:52] + "..."
         print(f"  {nama_pendek}")
         print(f"    Rp{dulu:,.0f} → Rp{sekarang:,.0f}  ({persen:.0f}% lebih murah, {jenis})")
+        if url:
+            print(f"    {url}")
     print()
 
 

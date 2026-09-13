@@ -3,3 +3,6 @@
 *.log
 snapshots/
 __pycache__/
+
+# JANGAN PERNAH commit sesi login Shopee lo (berisi cookie sesi!)
+.shopee_profil/
